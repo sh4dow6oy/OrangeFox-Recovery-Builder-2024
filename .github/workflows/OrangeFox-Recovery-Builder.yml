@@ -1,4 +1,4 @@
-name: OrangeFox r5q - Final Brightness & EROFS Fix
+name: OrangeFox r5q - Prebuilt Kernel Fix
 
 on:
   workflow_dispatch:
@@ -50,56 +50,57 @@ jobs:
         cd sync
         ./orangefox_sync.sh --branch ${{ github.event.inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
 
-    - name: Clone Trees & Kernel
+    - name: Clone Device Tree
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-        # Device Tree r5q
         git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
-        
-        # Common Tree SM8150
-        git clone https://github.com/sm8150-samsung/android_device_samsung_sm8150-common -b lineage-18.1 ./device/samsung/sm8150-common
-        
-        # Kernel Source (Roynas)
-        git clone https://github.com/Roynas-Android-Playground/kernel_samsung_r3q -b master ./kernel/samsung/sm8150
 
     - name: Patch & Fix Device Tree
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/${{ github.event.inputs.DEVICE_PATH }}
         
         # 1. FIX: "vendor/omni/config/common.mk does not exist"
+        # Curățăm referințele la folderele de vendor care nu există în manifestul minimalist
         find . -name "*.mk" -exec sed -i '/vendor\/omni/d' {} +
         find . -name "*.mk" -exec sed -i '/vendor\/twrp/d' {} +
         
         # 2. FIX: "add_lunch_combo is obsolete"
+        # Generăm AndroidProducts.mk corect pentru Android 12.1
         echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/omni_r5q.mk" > AndroidProducts.mk
         echo "COMMON_LUNCH_CHOICES := omni_r5q-eng" >> AndroidProducts.mk
         rm -f vendorsetup.sh
         
-        # 3. FIX CRITIC: TW_MAX_BRIGHTNESS & EROFS
-        cat <<EOF >> BoardConfig.mk
-        # --- OrangeFox Mandatory Fixes ---
-        BOARD_HAS_EROFS := true
-        TARGET_RECOVERY_FSTYPE_MOUNT_OPTIONS := erofs=ro
-        BOARD_USES_DYNAMIC_PARTITIONS := true
-        ALLOW_MISSING_DEPENDENCIES := true
-        BUILD_BROKEN_DUP_RULES := true
+        # 3. FIX: Redenumirea Kernel-ului și activarea Prebuilt-ului
+        # Ne asigurăm că BoardConfig caută fișierul redenumit de tine 'kernel'
+        sed -i 's/TARGET_PREBUILT_KERNEL := .*/TARGET_PREBUILT_KERNEL := $(DEVICE_PATH)\/prebuilt\/kernel/g' BoardConfig.mk
+        sed -i 's/TARGET_FORCE_PREBUILT_KERNEL := .*/TARGET_FORCE_PREBUILT_KERNEL := true/g' BoardConfig.mk
 
-        # Brightness Fix (Rezolva eroarea Failed: TW_MAX_BRIGHTNESS is not set)
+        # 4. INJECTĂM FIX-URILE CRITICE (EROFS, Brightness, Dynamic Partitions)
+        cat <<EOF >> BoardConfig.mk
+        
+        # --- OrangeFox Fixes for S10 Lite (r5q) ---
+        # Brightness Fix (Previne eroarea ckati failed)
         TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
         TW_MAX_BRIGHTNESS := 255
         TW_DEFAULT_BRIGHTNESS := 150
         
-        # UI Fixes
-        TW_THEME := portrait_hdpi
+        # EROFS & Partitioning (Necesare pentru Android 11/12/13)
+        BOARD_HAS_EROFS := true
+        TARGET_RECOVERY_FSTYPE_MOUNT_OPTIONS := erofs=ro
+        BOARD_USES_DYNAMIC_PARTITIONS := true
+        
+        # UI & Screen Config
         DEVICE_SCREEN_WIDTH := 1080
         DEVICE_SCREEN_HEIGHT := 2400
+        TW_THEME := portrait_hdpi
         
-        # Kernel Configuration
-        TARGET_KERNEL_CONFIG := r5q_defconfig
-        TARGET_KERNEL_SOURCE := kernel/samsung/sm8150
+        # Safety Flags
+        ALLOW_MISSING_DEPENDENCIES := true
+        BUILD_BROKEN_DUP_RULES := true
         EOF
 
-        # 4. FIX: /sbin/ paths for Android 12.1
+        # 5. FIX: /sbin/ paths pentru Android 12.1
+        # Re-mapăm scripturile de inițializare pentru structura de Android 12
         find recovery/root -name "*.rc" -exec sed -i 's/\/sbin\//\/system\/bin\//g' {} +
 
     - name: Set Swap Space
@@ -120,7 +121,7 @@ jobs:
         
         mka ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
 
-    - name: Upload Recovery
+    - name: Upload Recovery Image
       uses: softprops/action-gh-release@v2
       with:
         files: |
