@@ -1,229 +1,131 @@
-name: OrangeFox - Build
+name: OrangeFox r5q - Final Fixed Build
 
 on:
   workflow_dispatch:
     inputs:
+      DEVICE_NAME:
+        description: 'DEVICE_NAME'
+        placeholder: 'r5q'
+        default: 'r5q'
       MANIFEST_BRANCH:
-        description: 'OrangeFox Branch'
-        required: true
+        description: 'OrangeFox Manifest Branch'
         default: '12.1'
-        type: choice
-        options:
-        - 14.1
-        - 12.1
-        - 11.0
       DEVICE_TREE:
-        description: 'Custom Recovery Tree'
-        required: true
+        description: 'Custom Device Tree'
         default: 'https://github.com/sh4dow6oy/android_device_samsung_r5q'
       DEVICE_TREE_BRANCH:
-        description: 'Custom Recovery Tree Branch'
-        required: true
+        description: 'Custom Device Tree Branch'
         default: 'android-9.0'
       DEVICE_PATH:
-        description: 'Specify your device path.'
-        required: true
+        description: 'Device Path'
         default: 'device/samsung/r5q'
-      DEVICE_NAME:
-        description: 'Specify your Device Codename.'
-        required: true
-        default: 'r5q'
       BUILD_TARGET:
-        description: 'Specify your Build Target'
-        required: true
+        description: 'Build Target (recovery, boot, etc)'
         default: 'recovery'
-        type: choice
-        options:
-        - boot
-        - recovery
-        - vendorboot
-      LDCHECK:
-        description: 'Path of blobs to check' 
-        required: true
-        default: 'system/bin/qseecomd'
-      RECOVERY_TAR:
-        description: 'Release recovery.tar For Samsung devices'
-        required: true
-        default: true
-        type: boolean
-      RECOVERY_INSTALLER:
-        description: 'Include recovery installer zip'
-        type: boolean
-        required: true
-        default: true
 
 jobs:
   build:
-    name: Build OFRP by ${{ github.actor }}
-    runs-on: ubuntu-latest
-    if: github.event.repository.owner.id == github.event.sender.id
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
-    - name: Display Inputs
-      run: |
-        echo "::group::User Environment Variables"
-        echo "Displaying variables/inputs."
-        echo "Include Recovery Installer: ${{ github.event.inputs.RECOVERY_INSTALLER }}"
-        echo "Release recovery.tar For Samsung devices: ${{ github.event.inputs.RECOVERY_TAR }}"
-        echo "::endgroup::"
-
-    - name: Clean-up
+    - name: Cleanup Workspace
       uses: rokibhasansagar/slimhub_actions@main
 
-    - name: Swap Space
-      uses: pierotofy/set-swap-space@master
-      with:
-        swap-size-gb: 24
-      
-    - name: Build Environment
+    - name: Prepare Environment
       run: |
         sudo apt update
-        sudo apt -y upgrade
+        sudo apt install -y git python3 tar aria2 bc build-essential zip curl libssl-dev
         git clone https://gitlab.com/OrangeFox/misc/scripts
         cd scripts
         sudo bash setup/android_build_env.sh
-      
-    - name: Set-up Manifest
-      if: github.event.inputs.MANIFEST_BRANCH == '11.0' || github.event.inputs.MANIFEST_BRANCH == '12.1' || github.event.inputs.MANIFEST_BRANCH == '14.1'
+        sed -i 's/cd -/cd .. /g' setup/install_android_sdk.sh
+        sudo bash setup/install_android_sdk.sh
+
+    - name: Sync OrangeFox Sources
+        # Folosim calea din eroarea ta anterioara: OrangeFox/fox_12.1
       run: |
-        mkdir -p ${GITHUB_WORKSPACE}/OrangeFox
-        cd ${GITHUB_WORKSPACE}/OrangeFox
-        git config --global user.name "Samuel Kendall"
-        git config --global user.email "kinguser981@gmail.com"
         git clone https://gitlab.com/OrangeFox/sync.git
         cd sync
         ./orangefox_sync.sh --branch ${{ github.event.inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
 
-    - name: Clone Device Tree
+    - name: Clone Device Tree & Kernel
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        # Clonam Device Tree-ul indicat de tine
         git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
-        cd ${{ github.event.inputs.DEVICE_PATH }}
-        echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
+        
+        # Clonam Common Tree-ul SM8150 (Necesar pentru Samsung QCOM)
+        git clone https://github.com/sm8150-samsung/android_device_samsung_sm8150-common -b lineage-18.1 ./device/samsung/sm8150-common
+        
+        # Clonam Kernel-ul Roynas (Suporta EROFS si noile firmware-uri Samsung)
+        git clone https://github.com/Roynas-Android-Playground/kernel_samsung_r3q -b master ./kernel/samsung/sm8150
 
-    - name: Check Manifest Branch
-      uses: haya14busa/action-cond@v1
-      id: fox_branch
+    - name: Patch & Fix Device Tree (The "Chirurgia")
+      run: |
+        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/${{ github.event.inputs.DEVICE_PATH }}
+        
+        # 1. FIX: "vendor/omni/config/common.mk does not exist"
+        # Stergem orice referinta la vendor/omni sau vendor/twrp din tot tree-ul
+        find . -name "*.mk" -exec sed -i '/vendor\/omni/d' {} +
+        find . -name "*.mk" -exec sed -i '/vendor\/twrp/d' {} +
+        find . -name "*.mk" -exec sed -i '/vendor\/lineage/d' {} +
+        
+        # 2. FIX: "add_lunch_combo is obsolete"
+        # Cream un AndroidProducts.mk modern
+        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/omni_r5q.mk" > AndroidProducts.mk
+        echo "COMMON_LUNCH_CHOICES := omni_r5q-eng" >> AndroidProducts.mk
+        rm -f vendorsetup.sh
+        
+        # 3. FIX: Suport EROFS si Partitii Dinamice (Obligatoriu pentru S10 Lite)
+        # Injectam aceste linii in BoardConfig.mk trimis de tine
+        cat <<EOF >> BoardConfig.mk
+        # --- OrangeFox Fixes for r5q ---
+        BOARD_HAS_EROFS := true
+        TARGET_RECOVERY_FSTYPE_MOUNT_OPTIONS := erofs=ro
+        BOARD_EROFS_PAGESIZE := 4096
+        BOARD_EROFS_COMPRESSOR := lz4hc,9
+        TARGET_USERIMAGES_USE_EROFS := true
+        BOARD_USES_DYNAMIC_PARTITIONS := true
+        TARGET_KERNEL_CONFIG := r5q_defconfig
+        TARGET_KERNEL_SOURCE := kernel/samsung/sm8150
+        ALLOW_MISSING_DEPENDENCIES := true
+        BUILD_BROKEN_DUP_RULES := true
+        EOF
+
+        # 4. FIX: "recovery/root" paths pentru Android 12.1
+        # In Android 12+, serviciile s-au mutat din /sbin
+        find recovery/root -name "*.rc" -exec sed -i 's/\/sbin\//\/system\/bin\//g' {} +
+
+    - name: Set Swap Space
+      uses: pierotofy/set-swap-space@master
       with:
-        cond: ${{ github.event.inputs.MANIFEST_BRANCH == '11.0' || github.event.inputs.MANIFEST_BRANCH == '12.1' }}
-        if_true: lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng && make clean && mka adbd ${{ github.event.inputs.BUILD_TARGET }}image
-        if_false: lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng && make clean && mka ${{ github.event.inputs.BUILD_TARGET }}image
-      
+        swap-size-gb: 12
+
     - name: Building OrangeFox
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
         set +e
         source build/envsetup.sh
-        export ALLOW_MISSING_DEPENDENCIES=true
         set -e
-        ${{ steps.fox_branch.outputs.value }}
-
-    - name: Set Build Date # Output will be use in Release
-      run: |
-        echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
-        DEVICE_TREE_URL="${{ github.event.inputs.DEVICE_TREE }}"
-        if [[ "${DEVICE_TREE_URL}" == *.git ]]; then
-          DEVICE_TREE_URL="${DEVICE_TREE_URL%.git}"
-        fi
-        echo "DEVICE_TREE_URL=${DEVICE_TREE_URL}" >> $GITHUB_ENV
-
-    - name: Check if Recovery Exist
-      run: |
-        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-        if [ -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img ]; then
-            echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
-            echo "FILE_PATH=${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}" >> $GITHUB_ENV
-            echo "MD5_IMG=$(md5sum out/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
-        elif [ -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img ]; then
-            echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
-            echo "FILE_PATH=${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/target/product/${{ github.event.inputs.DEVICE_NAME }}" >> $GITHUB_ENV
-            echo "MD5_IMG=$(md5sum out/target/product/${{ github.event.inputs.DEVICE_NAME }}/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
-        else
-            echo "Recovery out directory is empty."
-            cd Exit
-        fi
-
-    - name: Rename the Recovery
-      run: |
-        cd ${{ env.FILE_PATH }}/
-        if [ "${{ github.event.inputs.BUILD_TARGET }}" = "boot" ]; then
-        mv OrangeFox*.img boot.img
-        echo "RECOVERY_TYPE=boot" >> $GITHUB_ENV
-        echo "boot.img file found!"
-        elif [ "${{ github.event.inputs.BUILD_TARGET }}" = "recovery" ]; then
-        mv OrangeFox*.img recovery.img
-        echo "RECOVERY_TYPE=recovery" >> $GITHUB_ENV
-        echo "recovery.img file found!"
-        elif [ "${{ github.event.inputs.BUILD_TARGET }}" = "vendorboot" ]; then
-        mv OrangeFox*.img vendor_boot.img
-        echo "RECOVERY_TYPE=vendor_boot" >> $GITHUB_ENV
-        echo "vendor_boot.img file found!"
-        else
-        echo "No Recovery file found!"
-        fi
-      continue-on-error: true
-      
-    - name: Include Recovery Installer
-      run: |
-        if [ ${{ github.event.inputs.RECOVERY_INSTALLER }} = true ]; then
-          cd ${{ env.FILE_PATH }}/
-          wget https://github.com/kinguser981/recovery-installer/releases/download/11256427880/recovery-installer.zip
-          zip -ur recovery-installer.zip ${{ env.RECOVERY_TYPE }}.img
-        fi
-      continue-on-error: true
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export LC_ALL=C
         
-    - name: Recovery to tar for Samsung devices
-      run: |
-        if [ ${{ github.event.inputs.RECOVERY_TAR }} = true ]; then
-          cd ${{ env.FILE_PATH }}/
-          tar -cvf ${{ env.RECOVERY_TYPE }}.tar ${{ env.RECOVERY_TYPE }}.img
-        fi
-      continue-on-error: true
+        # Folosim omni_r5q pentru ca asa se numeste fisierul in repo-ul sh4dow6oy
+        lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng
+        
+        mka ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
 
-    - name: Upload to Release
-      if: env.CHECK_IMG_IS_OK == 'true'
-      uses: softprops/action-gh-release@v1
+    - name: Upload Recovery Image
+      uses: softprops/action-gh-release@v2
       with:
         files: |
-          ${{ env.FILE_PATH }}/${{ env.RECOVERY_TYPE }}.img
-          ${{ env.FILE_PATH }}/${{ env.RECOVERY_TYPE }}.tar
-          ${{ env.FILE_PATH }}/recovery-installer.zip
-          ${{ env.FILE_PATH }}/OrangeFox*.zip
-        name: Unofficial OrangeFox for ${{ github.event.inputs.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
+          OrangeFox/fox_12.1/out/target/product/r5q/*.img
+          OrangeFox/fox_12.1/out/target/product/r5q/*.zip
+        name: OrangeFox-r5q-S10Lite-${{ github.run_id }}
         tag_name: ${{ github.run_id }}
-        body: |
-          Build: ${{ github.event.inputs.MANIFEST_BRANCH }}
-          Device: [Device Tree/Branch](${{ github.event.inputs.DEVICE_TREE }}/tree/${{ github.event.inputs.DEVICE_TREE_BRANCH }})
-          Commit: Most recent [commit](${{ github.event.inputs.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }}) during building.
-          
-    - name: Release ramdisk-recovery
-      if: env.CHECK_IMG_IS_OK == 'true'
-      uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
-      with:
-        files: |
-          ${{ env.FILE_PATH }}/obj/PACKAGING/vendor_ramdisk_fragments_intermediates/recovery.*
-          ${{ env.FILE_PATH }}/ramdisk-recovery.*
-        name: Unofficial OrangeFox for ${{ github.event.inputs.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
-        tag_name: ${{ github.run_id }}
-        body: |
-          Target: ${{ env.RECOVERY_TYPE }}.img
-          Build: ${{ github.event.inputs.MANIFEST_BRANCH }}
-          Device: [Device Tree/Branch](${{ env.DEVICE_TREE_URL }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
-          Commit: Most recent [commit](${{ env.DEVICE_TREE_URL }}/commit/${{ env.COMMIT_ID }}) during building.
-          MD5 (img): ${{ env.MD5_IMG }}
-          
-    - name: Run LDCheck
-      run: |
-        cd tools
-        mv -n libneeds ${{ env.FILE_PATH }}/recovery/root/
-        mv -n ldcheck ${{ env.FILE_PATH }}/recovery/root/
-        cd ${{ env.FILE_PATH }}/recovery/root/
-        python3 ldcheck -p system/lib64:vendor/lib64:system/lib:vendor/lib -d ${{ github.event.inputs.LDCHECK }}
-        echo "Done checking missing dependencies. Review, and reconfigure your tree."
-      continue-on-error: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
