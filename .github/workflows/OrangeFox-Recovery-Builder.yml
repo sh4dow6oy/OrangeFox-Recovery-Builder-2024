@@ -8,7 +8,7 @@ on:
         default: 'r5q'
       MANIFEST_BRANCH:
         description: 'OrangeFox Manifest Branch'
-        default: '12.1'
+        default: '14.1'
       DEVICE_TREE:
         description: 'Custom Device Tree'
         default: 'https://github.com/sh4dow6oy/android_device_samsung_r5q'
