@@ -1,4 +1,4 @@
-name: OrangeFox r5q - Final Omni Fix
+name: OrangeFox r5q - Direct Sync Fix
 
 on:
   workflow_dispatch:
@@ -35,41 +35,45 @@ jobs:
           tar -I zstd -xf neutron-clang-10032024.tar.zst -C ${GITHUB_WORKSPACE}/clang
           echo "${GITHUB_WORKSPACE}/clang/bin" >> $GITHUB_PATH
 
-      - name: Sync OrangeFox Sources
+      - name: Sync OrangeFox (Manual Mode)
         run: |
-          git clone https://gitlab.com/OrangeFox/sync.git
-          cd sync
-          ./orangefox_sync.sh --branch 12.1 --path ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
+          mkdir -p ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
+          cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
+          git config --global user.email "gh-actions@example.com"
+          git config --global user.name "GitHub Actions"
+          # Inițializăm manual pentru a evita erorile scriptului de sync
+          repo init -u https://gitlab.com/OrangeFox/manifest.git -b 12.1 --depth=1
+          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 
       - name: Clone Device Tree & Roynas Kernel
         run: |
+          # Ne asigurăm că suntem în folderul corect
           cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
           git clone https://github.com/sh4dow6oy/android_device_samsung_r5q -b android-9.0 ./device/samsung/r5q
           git clone https://github.com/sh4dow6oy/samsung_kernel_r5q -b master ./kernel/samsung/sm8150
 
-      - name: Patch & Clean Device Tree (Omni Fix)
+      - name: Patch & Fix Everything
         run: |
           cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
           
-          # 1. FIX CRITIC: Ștergem toate referințele la vendor/omni și vendor/twrp care nu există
-          # Aceasta rezolvă eroarea "vendor/omni/config/common.mk does not exist"
-          find . -name "*.mk" -exec sed -i '/vendor\/omni/d' {} +
-          find . -name "*.mk" -exec sed -i '/vendor\/twrp/d' {} +
+          # 1. FIX: Eliminăm eroarea "vendor/omni/config/common.mk" din toate fișierele
+          grep -rli "vendor/omni" . | xargs -i@ sed -i '/vendor\/omni/d' @
+          grep -rli "vendor/twrp" . | xargs -i@ sed -i '/vendor\/twrp/d' @
           
-          # 2. FIX KERNEL SOURCE (Nuclear Cleanup)
+          # 2. FIX: Kernel Nuclear Cleanup (Roynas Neutron Fixes)
           cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/kernel/samsung/sm8150
           find . -type f \( -name "Makefile*" -o -name "*.mk" \) -exec sed -i 's/-mllvm -polly[^ ]*//g' {} +
           find . -type f \( -name "Makefile*" -o -name "*.mk" \) -exec sed -i 's/-mllvm//g' {} +
           [ -f arch/arm64/kernel/vdso/Makefile ] && sed -i 's/-static//g' arch/arm64/kernel/vdso/Makefile
           sed -i 's/ifneq ($(wildcard $(srctree)\/scripts\/gcc-wrapper.py),)/ifeq (0,1)/g' Makefile
 
-          # 3. PATCH BOARDCONFIG.MK
+          # 3. FIX: BoardConfig.mk
           cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
           sed -i 's/TARGET_FORCE_PREBUILT_KERNEL := .*/TARGET_FORCE_PREBUILT_KERNEL := false/g' BoardConfig.mk
           sed -i '/TARGET_PREBUILT_KERNEL/d' BoardConfig.mk
 
           cat <<EOF >> BoardConfig.mk
-          # --- Kernel & Recovery Fixes ---
+          # --- OrangeFox Integrated Fixes ---
           TARGET_KERNEL_SOURCE := kernel/samsung/sm8150
           TARGET_KERNEL_CONFIG := r5q_defconfig
           BOARD_KERNEL_IMAGE_NAME := Image.gz-dtb
@@ -81,19 +85,7 @@ jobs:
           ALLOW_MISSING_DEPENDENCIES := true
           EOF
 
-          # 4. FIX RECOVERY.FSTAB
-          cat <<EOF > recovery.fstab
-          /system        erofs   system                logical;first_stage_mount
-          /vendor        erofs   vendor                logical;first_stage_mount
-          /product       erofs   product               logical;first_stage_mount
-          /odm           erofs   odm                   logical;first_stage_mount
-          /boot          emmc    /dev/block/bootdevice/by-name/boot
-          /recovery      emmc    /dev/block/bootdevice/by-name/recovery
-          /data          f2fs    /dev/block/bootdevice/by-name/userdata   flags=fileencryption=ice:aes-256-cts
-          /external_sd   vfat    /dev/block/mmcblk0p1 /dev/block/mmcblk0  flags=display="MicroSD";storage;wipeui;removable
-          EOF
-
-          # 5. FIX AndroidProducts.mk & Lunch
+          # 4. FIX: AndroidProducts.mk & Lunch
           echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/omni_r5q.mk" > AndroidProducts.mk
           echo "COMMON_LUNCH_CHOICES := omni_r5q-eng" >> AndroidProducts.mk
           rm -f vendorsetup.sh
@@ -101,27 +93,25 @@ jobs:
       - name: Build OrangeFox
         run: |
           cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
-          source build/envsetup.sh
-          
-          # Variabile Neutron
+          # Setăm variabila ALLOW_MISSING_DEPENDENCIES global
+          export ALLOW_MISSING_DEPENDENCIES=true
           export PATH="${GITHUB_WORKSPACE}/clang/bin:$PATH"
           export CC=clang
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-gnu-
-          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-          export KCFLAGS="-fcommon -Wno-error -Wno-unknown-warning-option -Wno-unused-command-line-argument"
-          export ALLOW_MISSING_DEPENDENCIES=true
+          export KCFLAGS="-fcommon -Wno-error -Wno-unknown-warning-option"
           
+          source build/envsetup.sh
           lunch omni_r5q-eng
           mka recoveryimage -j$(nproc --all)
 
-      - name: Upload Recovery
+      - name: Upload Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            OrangeFox/fox_12.1/out/target/product/r5q/OrangeFox*.zip
             OrangeFox/fox_12.1/out/target/product/r5q/recovery.img
+            OrangeFox/fox_12.1/out/target/product/r5q/OrangeFox*.zip
           tag_name: ${{ github.run_id }}
-          name: OrangeFox-r5q-Neutron-Roynas-${{ github.run_id }}
+          name: OrangeFox-r5q-Fixed-${{ github.run_id }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
