@@ -1,32 +1,11 @@
-name: OrangeFox r5q - Full Fix (Kernel + Brightness + Fstab)
+name: OrangeFox r5q - Neutron Clang Final
 
 on:
   workflow_dispatch:
-    inputs:
-      DEVICE_NAME:
-        description: 'DEVICE_NAME'
-        default: 'r5q'
-      MANIFEST_BRANCH:
-        description: 'OrangeFox Manifest Branch'
-        default: '14.1'
-      DEVICE_TREE:
-        description: 'Custom Device Tree'
-        default: 'https://github.com/sh4dow6oy/android_device_samsung_r5q'
-      DEVICE_TREE_BRANCH:
-        description: 'Custom Device Tree Branch'
-        default: 'android-9.0'
-      DEVICE_PATH:
-        description: 'Device Path'
-        default: 'device/samsung/r5q'
-      BUILD_TARGET:
-        description: 'Build Target'
-        default: 'recovery'
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -37,62 +16,64 @@ jobs:
     - name: Prepare Environment
       run: |
         sudo apt update
-        sudo apt install -y git python3 tar aria2 bc build-essential zip curl libssl-dev
+        sudo apt install -y git python3 tar aria2 bc build-essential zip curl libssl-dev libelf-dev bison flex lld llvm zstd
         git clone https://gitlab.com/OrangeFox/misc/scripts
         cd scripts
         sudo bash setup/android_build_env.sh
-        sed -i 's/cd -/cd .. /g' setup/install_android_sdk.sh
         sudo bash setup/install_android_sdk.sh
+
+    - name: Setup Neutron Clang
+      run: |
+        mkdir -p ${GITHUB_WORKSPACE}/clang
+        cd ${GITHUB_WORKSPACE}
+        wget -q https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst
+        tar -I zstd -xf neutron-clang-10032024.tar.zst -C clang
+        # Adăugăm folderul bin în PATH-ul GitHub Actions
+        echo "${GITHUB_WORKSPACE}/clang/bin" >> $GITHUB_PATH
 
     - name: Sync OrangeFox Sources
       run: |
         git clone https://gitlab.com/OrangeFox/sync.git
         cd sync
-        ./orangefox_sync.sh --branch ${{ github.event.inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        ./orangefox_sync.sh --branch 12.1 --path ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
 
-    - name: Clone Device Tree
+    - name: Clone Device Tree & Roynas Kernel
       run: |
-        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-        git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
+        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
+        git clone https://github.com/sh4dow6oy/android_device_samsung_r5q -b android-9.0 ./device/samsung/r5q
+        git clone https://github.com/sh4dow6oy/samsung_kernel_r5q -b master ./kernel/samsung/sm8150
 
-    - name: Patch & Fix Device Tree
+    - name: Patch BoardConfig & Fstab
       run: |
-        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/${{ github.event.inputs.DEVICE_PATH }}
+        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
         
-        # 1. FIX: Eliminăm referințele la folderele de vendor inexistente
-        find . -name "*.mk" -exec sed -i '/vendor\/omni/d' {} +
-        find . -name "*.mk" -exec sed -i '/vendor\/twrp/d' {} +
-        
-        # 2. FIX: AndroidProducts.mk (Modernizare pentru OrangeFox 12.1)
-        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/omni_r5q.mk" > AndroidProducts.mk
-        echo "COMMON_LUNCH_CHOICES := omni_r5q-eng" >> AndroidProducts.mk
-        rm -f vendorsetup.sh
-        
-        # 3. FIX: Kernel Config (Folosim fișierul redenumit de tine 'kernel')
-        sed -i 's/TARGET_PREBUILT_KERNEL := .*/TARGET_PREBUILT_KERNEL := $(DEVICE_PATH)\/prebuilt\/kernel/g' BoardConfig.mk
-        sed -i 's/TARGET_FORCE_PREBUILT_KERNEL := .*/TARGET_FORCE_PREBUILT_KERNEL := true/g' BoardConfig.mk
+        # Eliminăm orice referință la prebuilt kernel vechi
+        sed -i 's/TARGET_FORCE_PREBUILT_KERNEL := .*/TARGET_FORCE_PREBUILT_KERNEL := false/g' BoardConfig.mk
+        sed -i '/TARGET_PREBUILT_KERNEL/d' BoardConfig.mk
 
-        # 4. INJECTĂM FIX-URILE CRITICE (Brightness, EROFS, UI)
+        # Injectăm setările de Kernel Compiling
         cat <<EOF >> BoardConfig.mk
-        # --- OrangeFox Mandatory Fixes ---
+        TARGET_KERNEL_SOURCE := kernel/samsung/sm8150
+        TARGET_KERNEL_CONFIG := r5q_defconfig
+        BOARD_KERNEL_IMAGE_NAME := Image
+        
+        # Flag-uri Clang pentru Kernel
+        TARGET_KERNEL_CLANG_COMPILE := true
+        KERNEL_LLVM_SUPPORT := true
+        
+        # Fix-uri OrangeFox
         TW_MAX_BRIGHTNESS := 255
         TW_DEFAULT_BRIGHTNESS := 150
         TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
-        
         BOARD_HAS_EROFS := true
-        TARGET_RECOVERY_FSTYPE_MOUNT_OPTIONS := erofs=ro
         BOARD_USES_DYNAMIC_PARTITIONS := true
-        
         DEVICE_SCREEN_WIDTH := 1080
         DEVICE_SCREEN_HEIGHT := 2400
         TW_THEME := portrait_hdpi
-        
         ALLOW_MISSING_DEPENDENCIES := true
-        BUILD_BROKEN_DUP_RULES := true
         EOF
 
-        # 5. RESCRIERE RECOVERY.FSTAB (Fix pentru Dynamic Partitions & EROFS)
-        # Acesta înlocuiește fstab-ul de Android 9 cu unul compatibil cu Android 11/12/13
+        # Rescriere FSTAB pentru S10 Lite (Android 11+)
         cat <<EOF > recovery.fstab
         /system        erofs   system                               display="System";logical;first_stage_mount
         /vendor        erofs   vendor                               display="Vendor";logical;first_stage_mount
@@ -104,29 +85,25 @@ jobs:
         /data          f2fs    /dev/block/bootdevice/by-name/userdata   flags=fileencryption=ice:aes-256-cts
         /cache         ext4    /dev/block/bootdevice/by-name/cache
         /efs           ext4    /dev/block/bootdevice/by-name/efs        display="EFS";backup=1
-        /sec_efs       ext4    /dev/block/bootdevice/by-name/sec_efs    display="Sec EFS";backup=1
         /external_sd   vfat    /dev/block/mmcblk0p1 /dev/block/mmcblk0  flags=display="MicroSD";storage;wipeui;removable
         /usb_otg       vfat    /dev/block/sdg1 /dev/block/sdg           flags=display="USB-OTG";storage;wipeui;removable
         EOF
 
-        # 6. FIX: sbin paths (Android 12 compatibility)
-        find recovery/root -name "*.rc" -exec sed -i 's/\/sbin\//\/system\/bin\//g' {} +
-
-    - name: Set Swap Space
-      uses: pierotofy/set-swap-space@master
-      with:
-        swap-size-gb: 12
-
     - name: Building OrangeFox
       run: |
-        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-        set +e
+        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
         source build/envsetup.sh
-        set -e
-        export ALLOW_MISSING_DEPENDENCIES=true
-        export LC_ALL=C
-        lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng
-        mka ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+        
+        # Setăm variabilele Neutron Clang pentru procesul de build
+        export KBUILD_COMPILER_STRING="Neutron Clang 10032024"
+        export PATH="${GITHUB_WORKSPACE}/clang/bin:$PATH"
+        export CC=clang
+        export CLANG_TRIPLE=aarch64-linux-gnu-
+        export CROSS_COMPILE=aarch64-linux-gnu-
+        export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+        
+        lunch omni_r5q-eng
+        mka recoveryimage -j$(nproc --all)
 
     - name: Upload Recovery
       uses: softprops/action-gh-release@v2
@@ -134,7 +111,7 @@ jobs:
         files: |
           OrangeFox/fox_12.1/out/target/product/r5q/*.img
           OrangeFox/fox_12.1/out/target/product/r5q/*.zip
-        name: OrangeFox-r5q-S10Lite-Build-${{ github.run_id }}
+        name: OrangeFox-r5q-Neutron-${{ github.run_id }}
         tag_name: ${{ github.run_id }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
