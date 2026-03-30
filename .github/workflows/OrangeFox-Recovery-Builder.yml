@@ -45,23 +45,23 @@ jobs:
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
         git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
-    - name: Patch & Fix Device Tree (Theme + Fastbootd Fix)
+    - name: Patch & Fix Device Tree (Force Theme)
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
         
-        # 1. Curățăm orice setare anterioară de display sau boot
-        sed -i '/TW_THEME/d' BoardConfig.mk
-        sed -i '/DEVICE_SCREEN/d' BoardConfig.mk
-        sed -i '/TARGET_SCREEN/d' BoardConfig.mk
-        sed -i '/BOARD_BOOT_HEADER_VERSION/d' BoardConfig.mk
-        sed -i '/BOARD_MKBOOTIMG_ARGS/d' BoardConfig.mk
+        # 1. Reset total
+        rm -f BoardConfig.mk recovery.fstab
 
-        # 2. Reconstruim BoardConfig.mk cu variabilele CORECTE de temă
+        # 2. Reconstruim BoardConfig.mk
         cat <<EOF > BoardConfig.mk
-        # --- OrangeFox Theme (Nume variabile corecte) ---
+        # --- Mandatory Theme Settings ---
+        TW_THEME := portrait_hdpi
+        DEVICE_SCREEN_WIDTH := 1080
+        DEVICE_SCREEN_HEIGHT := 2400
         TARGET_SCREEN_WIDTH := 1080
         TARGET_SCREEN_HEIGHT := 2400
-        TW_THEME := portrait_hdpi
+        
+        # --- Brightness ---
         TW_MAX_BRIGHTNESS := 255
         TW_DEFAULT_BRIGHTNESS := 150
         TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
@@ -77,7 +77,7 @@ jobs:
         BOARD_MKBOOTIMG_ARGS := --header_version 2 --dtb device/samsung/r5q/prebuilt/dtb.img
         BOARD_RAMDISK_USE_LZ4 := true
         
-        # --- Suport Partiții Dinamice & FASTBOOTD ---
+        # --- Dynamic Partitions & Fastbootd ---
         BOARD_USES_DYNAMIC_PARTITIONS := true
         BOARD_BUILD_SYSTEM_ROOT_IMAGE := true
         BOARD_SUPPORTS_RECOVERY_RESIZE := true
@@ -90,13 +90,12 @@ jobs:
         BUILD_BROKEN_DUP_RULES := true
         EOF
 
-        # 3. Recreăm recovery.fstab (Logical mapping)
+        # 3. recovery.fstab (Identic cu cel anterior, e bun)
         cat <<EOF > recovery.fstab
         /system       erofs   system      display="System";logical;first_stage_mount
         /vendor       ext4    vendor      display="Vendor";logical;first_stage_mount
         /product      ext4    product     display="Product";logical;first_stage_mount
         /odm          ext4    odm         display="Odm";logical;first_stage_mount
-
         /boot         emmc    /dev/block/bootdevice/by-name/boot        flags=backup=1;flashimg=1
         /recovery     emmc    /dev/block/bootdevice/by-name/recovery    flags=backup=1;flashimg=1
         /metadata     ext4    /dev/block/bootdevice/by-name/metadata    display="Metadata"
@@ -104,12 +103,11 @@ jobs:
         /cache        ext4    /dev/block/bootdevice/by-name/cache
         /efs          ext4    /dev/block/bootdevice/by-name/efs          display="EFS";backup=1
         /dtbo         emmc    /dev/block/bootdevice/by-name/dtbo         display="DTBO";backup=1;flashimg=1
-
         /external_sd  vfat    /dev/block/mmcblk0p1 /dev/block/mmcblk0    flags=display="MicroSD";storage;wipeui;removable
         /usb-otg      vfat    /dev/block/sdg1      /dev/block/sdg        flags=display="USB-OTG";storage;wipeui;removable
         EOF
 
-        # 4. Curățenie Vendor/Omni
+        # 4. Curățenie Vendor
         find . -name "*.mk" -exec sed -i '/vendor\/omni/d' {} +
         find . -name "*.mk" -exec sed -i '/vendor\/twrp/d' {} +
     - name: Build OrangeFox
