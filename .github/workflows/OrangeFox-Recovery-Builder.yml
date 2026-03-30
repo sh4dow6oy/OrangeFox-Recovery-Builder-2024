@@ -48,43 +48,45 @@ jobs:
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
         git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
 
-    - name: Patch & Fix Device Tree
+    - name: Patch & Fix Device Tree (Anti-Bootloop Binary 9)
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
         
-        # 1. Curățăm setările vechi
+        # Curățăm tot ce am pus anterior pentru a evita dublurile
         sed -i '/TW_MAX_BRIGHTNESS/d' BoardConfig.mk
-        sed -i '/TW_DEFAULT_BRIGHTNESS/d' BoardConfig.mk
-        sed -i '/TW_BRIGHTNESS_PATH/d' BoardConfig.mk
-        sed -i '/BOARD_BOOT_HEADER_VERSION/d' BoardConfig.mk
         sed -i '/BOARD_MKBOOTIMG_ARGS/d' BoardConfig.mk
-        sed -i '/BOARD_PREBUILT_DTBIMAGE/d' BoardConfig.mk
-        sed -i '/BOARD_INCLUDE_DTB/d' BoardConfig.mk
+        sed -i '/BOARD_KERNEL_CMDLINE/d' BoardConfig.mk
 
-        # 2. Adăugăm setările pentru Binary 9 și OrangeFox
         cat <<EOF >> BoardConfig.mk
+        # --- Display Fix ---
         TW_MAX_BRIGHTNESS := 255
         TW_DEFAULT_BRIGHTNESS := 150
         TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
         
+        # --- Binary 9 / Android 13 Boot Fixes ---
         BOARD_BOOT_HEADER_VERSION := 2
         BOARD_INCLUDE_DTB := true
         BOARD_PREBUILT_DTBIMAGE := device/samsung/r5q/prebuilt/dtb.img
         BOARD_PREBUILT_DTBOIMAGE := device/samsung/r5q/prebuilt/dtbo.img
         TARGET_PREBUILT_KERNEL := device/samsung/r5q/prebuilt/kernel
         TARGET_FORCE_PREBUILT_KERNEL := true
-        BOARD_MKBOOTIMG_ARGS := --header_version 2 --dtb device/samsung/r5q/prebuilt/dtb.img
-        BOARD_RAMDISK_USE_LZ4 := true
         
+        # --- COMANDA CRITICĂ: Ignorăm securitatea Samsung ---
+        BOARD_KERNEL_CMDLINE := console=null androidboot.hardware=qcom androidboot.memcg=1 androidboot.selinux=permissive
+        BOARD_MKBOOTIMG_ARGS := --header_version 2 --dtb device/samsung/r5q/prebuilt/dtb.img
+        
+        # --- Fix-uri de Bootloop ---
+        BOARD_RAMDISK_USE_LZ4 := true
         BOARD_HAS_EROFS := true
         BOARD_USES_DYNAMIC_PARTITIONS := true
-        ALLOW_MISSING_DEPENDENCIES := true
-        BUILD_BROKEN_DUP_RULES := true
+        
+        # Dezactivăm verificările de sistem (DM-Verity)
+        BOARD_AVB_ENABLE := false
+        BOARD_AVB_RECOVERY_ROLLBACK_INDEX_LOCATION := 1
         EOF
 
-        # 3. Curățenie Vendor
-        find . -name "*.mk" -exec sed -i '/vendor\/omni/d' {} +
-        find . -name "*.mk" -exec sed -i '/vendor\/twrp/d' {} +
+        # FIX pentru fstab: Dezactivăm criptarea forțată care blochează logo-ul
+        sed -i 's/fileencryption=ice:aes-256-cts/encryptable=footer/g' recovery.fstab
 
     - name: Build OrangeFox
       run: |
