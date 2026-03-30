@@ -48,19 +48,69 @@ jobs:
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
         git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
 
-    - name: Patch & Fix Device Tree (Theme + Boot Fix)
+Iată scriptul YAML complet și final. Am adăugat suportul pentru Partiții Dinamice (Logical), EROFS, EXT4 și am corectat structura pentru ca OrangeFox să "vadă" corect /system, /vendor și restul, chiar dacă sunt în interiorul super-partiției.
+
+Script YAML Final pentru OrangeFox r5q (Binary 9 + Dynamic Partitions)
+YAML
+name: OrangeFox r5q - Final Fix (Dynamic & EROFS)
+on:
+  workflow_dispatch:
+    inputs:
+      MANIFEST_BRANCH:
+        description: 'OrangeFox Manifest Branch'
+        default: '12.1'
+      DEVICE_TREE:
+        description: 'Custom Device Tree'
+        default: 'https://github.com/sh4dow6oy/android_device_samsung_r5q'
+      DEVICE_TREE_BRANCH:
+        description: 'Custom Device Tree Branch'
+        default: 'android-9.0'
+      DEVICE_PATH:
+        description: 'Device Path'
+        default: 'device/samsung/r5q'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Cleanup Workspace
+      uses: rokibhasansagar/slimhub_actions@main
+
+    - name: Prepare Environment
+      run: |
+        sudo apt update
+        sudo apt install -y git python3 tar aria2 bc build-essential zip curl libssl-dev
+        git clone https://gitlab.com/OrangeFox/misc/scripts
+        cd scripts
+        sudo bash setup/android_build_env.sh
+        sed -i 's/cd -/cd .. /g' setup/install_android_sdk.sh
+        sudo bash setup/install_android_sdk.sh
+
+    - name: Sync OrangeFox Sources
+      run: |
+        git clone https://gitlab.com/OrangeFox/sync.git
+        cd sync
+        ./orangefox_sync.sh --branch ${{ github.event.inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+
+    - name: Clone Device Tree
+      run: |
+        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
+        git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
+
+    - name: Patch & Fix Device Tree
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
         
-        # 1. Curățăm orice setare anterioară de display sau boot
-        sed -i '/TW_THEME/d' BoardConfig.mk
-        sed -i '/DEVICE_SCREEN/d' BoardConfig.mk
-        sed -i '/TARGET_SCREEN/d' BoardConfig.mk
-        sed -i '/BOARD_BOOT_HEADER_VERSION/d' BoardConfig.mk
-        sed -i '/BOARD_MKBOOTIMG_ARGS/d' BoardConfig.mk
-
-        # 2. Adăugăm specificațiile de display și fix-urile de Binary 9
-        cat <<EOF >> BoardConfig.mk
+        # 1. Ștergem configurația veche pentru a evita conflictele
+        rm -f BoardConfig.mk recovery.fstab
+        
+        # 2. Creăm un BoardConfig.mk nou-nouț cu suport pentru LOGICAL partitions
+        cat <<EOF > BoardConfig.mk
         # --- OrangeFox Theme & Display ---
         DEVICE_SCREEN_WIDTH := 1080
         DEVICE_SCREEN_HEIGHT := 2400
@@ -76,19 +126,42 @@ jobs:
         BOARD_PREBUILT_DTBOIMAGE := device/samsung/r5q/prebuilt/dtbo.img
         TARGET_PREBUILT_KERNEL := device/samsung/r5q/prebuilt/kernel
         TARGET_FORCE_PREBUILT_KERNEL := true
-        
-        # Ignorăm securitatea Samsung (Anti-Bootloop la logo)
         BOARD_KERNEL_CMDLINE := console=null androidboot.hardware=qcom androidboot.memcg=1 androidboot.selinux=permissive
         BOARD_MKBOOTIMG_ARGS := --header_version 2 --dtb device/samsung/r5q/prebuilt/dtb.img
-        
         BOARD_RAMDISK_USE_LZ4 := true
-        BOARD_HAS_EROFS := true
+        
+        # --- Suport Partiții Dinamice (OBLIGATORIU pentru Lineage/GSI) ---
         BOARD_USES_DYNAMIC_PARTITIONS := true
+        BOARD_BUILD_SYSTEM_ROOT_IMAGE := true
+        BOARD_SUPPORTS_RECOVERY_RESIZE := true
+        BOARD_HAS_EROFS := true
+        TARGET_RECOVERY_FSTYPE_MOUNT_OPTIONS := erofs=ro
+        
+        # Fix-uri OrangeFox
         ALLOW_MISSING_DEPENDENCIES := true
         BUILD_BROKEN_DUP_RULES := true
         EOF
 
-        # 3. Curățenie Vendor obligatorie
+        # 3. Creăm un recovery.fstab care mapează partițiile Logice
+        cat <<EOF > recovery.fstab
+        /system       erofs   system      display="System";logical;first_stage_mount
+        /vendor       ext4    vendor      display="Vendor";logical;first_stage_mount
+        /product      ext4    product     display="Product";logical;first_stage_mount
+        /odm          ext4    odm         display="Odm";logical;first_stage_mount
+
+        /boot         emmc    /dev/block/bootdevice/by-name/boot        flags=backup=1;flashimg=1
+        /recovery     emmc    /dev/block/bootdevice/by-name/recovery    flags=backup=1;flashimg=1
+        /metadata     ext4    /dev/block/bootdevice/by-name/metadata    display="Metadata"
+        /data         f2fs    /dev/block/bootdevice/by-name/userdata    flags=fileencryption=ice:aes-256-cts
+        /cache        ext4    /dev/block/bootdevice/by-name/cache
+        /efs          ext4    /dev/block/bootdevice/by-name/efs          display="EFS";backup=1
+        /dtbo         emmc    /dev/block/bootdevice/by-name/dtbo         display="DTBO";backup=1;flashimg=1
+
+        /external_sd  vfat    /dev/block/mmcblk0p1 /dev/block/mmcblk0    flags=display="MicroSD";storage;wipeui;removable
+        /usb-otg      vfat    /dev/block/sdg1      /dev/block/sdg        flags=display="USB-OTG";storage;wipeui;removable
+        EOF
+
+        # 4. Curățenie Vendor/Omni
         find . -name "*.mk" -exec sed -i '/vendor\/omni/d' {} +
         find . -name "*.mk" -exec sed -i '/vendor\/twrp/d' {} +
     - name: Build OrangeFox
