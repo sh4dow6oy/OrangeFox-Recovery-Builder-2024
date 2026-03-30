@@ -1,7 +1,26 @@
-name: OrangeFox r5q - GitHub Mirror Sync
+name: OrangeFox r5q - Full Fix (Kernel + Brightness + Fstab)
 
 on:
   workflow_dispatch:
+    inputs:
+      DEVICE_NAME:
+        description: 'DEVICE_NAME'
+        default: 'r5q'
+      MANIFEST_BRANCH:
+        description: 'OrangeFox Manifest Branch'
+        default: '12.1'
+      DEVICE_TREE:
+        description: 'Custom Device Tree'
+        default: 'https://github.com/sh4dow6oy/android_device_samsung_r5q'
+      DEVICE_TREE_BRANCH:
+        description: 'Custom Device Tree Branch'
+        default: 'android-9.0'
+      DEVICE_PATH:
+        description: 'Device Path'
+        default: 'device/samsung/r5q'
+      BUILD_TARGET:
+        description: 'Build Target'
+        default: 'recovery'
 
 jobs:
   build:
@@ -9,94 +28,104 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: Cleanup Workspace (More Space)
-        uses: rokibhasansagar/slimhub_actions@main
+    - name: Cleanup Workspace
+      uses: rokibhasansagar/slimhub_actions@main
 
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bc build-essential flex bison lz4 libssl-dev libelf-dev \
-          ccache python3 python-is-python3 libarchive-tools wget zstd libtinfo6 zip gperf gcc-multilib g++-multilib git curl
+    - name: Prepare Environment
+      run: |
+        sudo apt update
+        sudo apt install -y git python3 tar aria2 bc build-essential zip curl libssl-dev
+        git clone https://gitlab.com/OrangeFox/misc/scripts
+        cd scripts
+        sudo bash setup/android_build_env.sh
+        sed -i 's/cd -/cd .. /g' setup/install_android_sdk.sh
+        sudo bash setup/install_android_sdk.sh
+    - name: Sync OrangeFox Sources
+      run: |
+        git clone https://gitlab.com/OrangeFox/sync.git
+        cd sync
+        ./orangefox_sync.sh --branch ${{ github.event.inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+    - name: Clone Device Tree
+      run: |
+        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
+    - name: Patch & Fix Device Tree
+      run: |
+        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
+        
+        # 1. CURĂȚARE DEPENDENȚE VECHI
+        find . -name "*.mk" -exec sed -i '/vendor\/omni/d' {} +
+        find . -name "*.mk" -exec sed -i '/vendor\/twrp/d' {} +
+        
+        # 2. FORȚARE KERNEL ȘI DTBO DIN ANDROID 13
+        # Ștergem orice setare veche pentru a evita conflictele
+        sed -i '/TARGET_PREBUILT_KERNEL/d' BoardConfig.mk
+        sed -i '/BOARD_PREBUILT_DTBOIMAGE/d' BoardConfig.mk
+        sed -i '/BOARD_BOOT_HEADER_VERSION/d' BoardConfig.mk
+        sed -i '/BOARD_MKBOOTIMG_ARGS/d' BoardConfig.mk
+        
+        cat <<EOF >> BoardConfig.mk
+        # --- Android 13 Prebuilt Integration ---
+        TARGET_FORCE_PREBUILT_KERNEL := true
+        TARGET_PREBUILT_KERNEL := device/samsung/r5q/prebuilt/kernel
+        BOARD_PREBUILT_DTBOIMAGE := device/samsung/r5q/prebuilt/dtbo.img
+        
+        # --- Bootloader Compatibility (Header v2 + LZ4) ---
+        BOARD_BOOT_HEADER_VERSION := 2
+        BOARD_MKBOOTIMG_ARGS := --header_version $(BOARD_BOOT_HEADER_VERSION)
+        BOARD_RAMDISK_USE_LZ4 := true
+        
+        # --- UI & Partition Fixes ---
+        TW_MAX_BRIGHTNESS := 255
+        TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
+        BOARD_HAS_EROFS := true
+        BOARD_USES_DYNAMIC_PARTITIONS := true
+        ALLOW_MISSING_DEPENDENCIES := true
+        EOF
 
-      - name: Install Repo Tool
-        run: |
-          mkdir -p ~/bin
-          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-          chmod a+x ~/bin/repo
-          echo "$HOME/bin" >> $GITHUB_PATH
+        # 3. FIX RECOVERY.FSTAB (EROFS & Android 13 Paths)
+        cat <<EOF > recovery.fstab
+        /system        erofs   system                display="System";logical;first_stage_mount
+        /vendor        erofs   vendor                display="Vendor";logical;first_stage_mount
+        /product       erofs   product               display="Product";logical;first_stage_mount
+        /odm           erofs   odm                   display="Odm";logical;first_stage_mount
+        /boot          emmc    /dev/block/bootdevice/by-name/boot
+        /recovery      emmc    /dev/block/bootdevice/by-name/recovery
+        /metadata      ext4    /dev/block/bootdevice/by-name/metadata
+        /data          f2fs    /dev/block/bootdevice/by-name/userdata   flags=fileencryption=ice:aes-256-cts
+        /cache         ext4    /dev/block/bootdevice/by-name/cache
+        /efs           ext4    /dev/block/bootdevice/by-name/efs        display="EFS";backup=1
+        /external_sd   vfat    /dev/block/mmcblk0p1 /dev/block/mmcblk0  flags=display="MicroSD";storage;wipeui;removable
+        EOF
 
-      - name: Setup Neutron Clang
-        run: |
-          mkdir -p ${GITHUB_WORKSPACE}/clang
-          wget -q https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst
-          tar -I zstd -xf neutron-clang-10032024.tar.zst -C ${GITHUB_WORKSPACE}/clang
-          echo "${GITHUB_WORKSPACE}/clang/bin" >> $GITHUB_PATH
+        # 4. MODERNIZARE LUNCH
+        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/omni_r5q.mk" > AndroidProducts.mk
+        echo "COMMON_LUNCH_CHOICES := omni_r5q-eng" >> AndroidProducts.mk
+    - name: Set Swap Space
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 12
 
-      - name: Sync OrangeFox Sources
-        run: |
-          git clone https://gitlab.com/OrangeFox/sync.git
-          cd sync
-          ./orangefox_sync.sh --branch ${{ github.event.inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-
-      - name: Clone Device Tree & Roynas Kernel
-        run: |
-          cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
-          git clone https://github.com/sh4dow6oy/android_device_samsung_r5q -b android-9.0 ./device/samsung/r5q
-          git clone https://github.com/Roynas-Android-Playground/kernel_samsung_r3q -b master ./kernel/samsung/sm8150
-
-      - name: Patch & Clean Tree (Omni Fix)
-        run: |
-          # 1. FIX: Eliminăm referințele la vendor/omni din toate fișierele .mk
-          cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
-          grep -rli "vendor/omni" . | xargs -i@ sed -i '/vendor\/omni/d' @
-          grep -rli "vendor/twrp" . | xargs -i@ sed -i '/vendor\/twrp/d' @
-          
-          # 2. Kernel Fixes (Roynas Specs)
-          cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/kernel/samsung/sm8150
-          find . -type f \( -name "Makefile*" -o -name "*.mk" \) -exec sed -i 's/-mllvm -polly[^ ]*//g' {} +
-          find . -type f \( -name "Makefile*" -o -name "*.mk" \) -exec sed -i 's/-mllvm//g' {} +
-          [ -f arch/arm64/kernel/vdso/Makefile ] && sed -i 's/-static//g' arch/arm64/kernel/vdso/Makefile
-          sed -i 's/ifneq ($(wildcard $(srctree)\/scripts\/gcc-wrapper.py),)/ifeq (0,1)/g' Makefile
-
-          # 3. Injectăm configurația finală în BoardConfig.mk
-          cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
-          sed -i 's/TARGET_FORCE_PREBUILT_KERNEL := .*/TARGET_FORCE_PREBUILT_KERNEL := false/g' BoardConfig.mk
-          cat <<EOF >> BoardConfig.mk
-          TARGET_KERNEL_SOURCE := kernel/samsung/sm8150
-          TARGET_KERNEL_CONFIG := r5q_defconfig
-          BOARD_KERNEL_IMAGE_NAME := Image.gz-dtb
-          TARGET_KERNEL_CLANG_COMPILE := true
-          TW_MAX_BRIGHTNESS := 255
-          TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
-          BOARD_HAS_EROFS := true
-          BOARD_USES_DYNAMIC_PARTITIONS := true
-          ALLOW_MISSING_DEPENDENCIES := true
-          EOF
-
-      - name: Build OrangeFox
-        run: |
-          cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
-          export ALLOW_MISSING_DEPENDENCIES=true
-          export PATH="${GITHUB_WORKSPACE}/clang/bin:$PATH"
-          export CC=clang
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export KCFLAGS="-fcommon -Wno-error -Wno-unknown-warning-option"
-          
-          source build/envsetup.sh
-          lunch omni_r5q-eng
-          mka recoveryimage -j$(nproc --all)
-
-      - name: Upload Recovery
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            OrangeFox/fox_12.1/out/target/product/r5q/recovery.img
-            OrangeFox/fox_12.1/out/target/product/r5q/OrangeFox*.zip
-          tag_name: ${{ github.run_id }}
-          name: OrangeFox-r5q-Final-${{ github.run_id }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Building OrangeFox
+      run: |
+        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        set +e
+        source build/envsetup.sh
+        set -e
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export LC_ALL=C
+        lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng
+        mka ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+    - name: Upload Recovery
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          OrangeFox/fox_12.1/out/target/product/r5q/*.img
+          OrangeFox/fox_12.1/out/target/product/r5q/*.zip
+        name: OrangeFox-r5q-S10Lite-Build-${{ github.run_id }}
+        tag_name: ${{ github.run_id }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
