@@ -52,62 +52,39 @@ jobs:
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
         git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
-    - name: Patch & Fix Device Tree
+    - name: Patch & Fix Device Tree (Header Fix)
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
         
-        # 1. CURĂȚARE DEPENDENȚE VECHI
-        find . -name "*.mk" -exec sed -i '/vendor\/omni/d' {} +
-        find . -name "*.mk" -exec sed -i '/vendor\/twrp/d' {} +
-        
-        # 2. FORȚARE KERNEL ȘI DTBO DIN ANDROID 13
-        # Ștergem orice setare veche pentru a evita conflictele
-        sed -i '/TARGET_PREBUILT_KERNEL/d' BoardConfig.mk
-        sed -i '/BOARD_PREBUILT_DTBOIMAGE/d' BoardConfig.mk
+        # 1. Ștergem orice urmă de configurare veche pentru boot
         sed -i '/BOARD_BOOT_HEADER_VERSION/d' BoardConfig.mk
         sed -i '/BOARD_MKBOOTIMG_ARGS/d' BoardConfig.mk
+        sed -i '/TARGET_PREBUILT_KERNEL/d' BoardConfig.mk
+        sed -i '/BOARD_PREBUILT_DTBOIMAGE/d' BoardConfig.mk
         
+        # 2. Inserăm manual valorile corecte (Fără variabile care pot rămâne goale)
         cat <<EOF >> BoardConfig.mk
-        # --- Android 13 Prebuilt Integration ---
+        # --- Mandatory for Binary 9 / Android 13 ---
+        BOARD_BOOT_HEADER_VERSION := 2
+        BOARD_MKBOOTIMG_ARGS := --header_version 2
+        BOARD_RAMDISK_USE_LZ4 := true
+        
+        # Kernel & DTBO preluat din folderul prebuilt (A13)
         TARGET_FORCE_PREBUILT_KERNEL := true
         TARGET_PREBUILT_KERNEL := device/samsung/r5q/prebuilt/kernel
         BOARD_PREBUILT_DTBOIMAGE := device/samsung/r5q/prebuilt/dtbo.img
         
-        # --- Bootloader Compatibility (Header v2 + LZ4) ---
-        BOARD_BOOT_HEADER_VERSION := 2
-        BOARD_MKBOOTIMG_ARGS := --header_version $(BOARD_BOOT_HEADER_VERSION)
-        BOARD_RAMDISK_USE_LZ4 := true
-        
-        # --- UI & Partition Fixes ---
-        TW_MAX_BRIGHTNESS := 255
-        TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
+        # --- System & Recovery Fixes ---
         BOARD_HAS_EROFS := true
         BOARD_USES_DYNAMIC_PARTITIONS := true
+        TW_MAX_BRIGHTNESS := 255
+        TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
         ALLOW_MISSING_DEPENDENCIES := true
         EOF
 
-        # 3. FIX RECOVERY.FSTAB (EROFS & Android 13 Paths)
-        cat <<EOF > recovery.fstab
-        /system        erofs   system                display="System";logical;first_stage_mount
-        /vendor        erofs   vendor                display="Vendor";logical;first_stage_mount
-        /product       erofs   product               display="Product";logical;first_stage_mount
-        /odm           erofs   odm                   display="Odm";logical;first_stage_mount
-        /boot          emmc    /dev/block/bootdevice/by-name/boot
-        /recovery      emmc    /dev/block/bootdevice/by-name/recovery
-        /metadata      ext4    /dev/block/bootdevice/by-name/metadata
-        /data          f2fs    /dev/block/bootdevice/by-name/userdata   flags=fileencryption=ice:aes-256-cts
-        /cache         ext4    /dev/block/bootdevice/by-name/cache
-        /efs           ext4    /dev/block/bootdevice/by-name/efs        display="EFS";backup=1
-        /external_sd   vfat    /dev/block/mmcblk0p1 /dev/block/mmcblk0  flags=display="MicroSD";storage;wipeui;removable
-        EOF
-
-        # 4. MODERNIZARE LUNCH
-        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/omni_r5q.mk" > AndroidProducts.mk
-        echo "COMMON_LUNCH_CHOICES := omni_r5q-eng" >> AndroidProducts.mk
-    - name: Set Swap Space
-      uses: pierotofy/set-swap-space@master
-      with:
-        swap-size-gb: 12
+        # 3. Curățenie Vendor/Omni (obligatoriu pentru a trece de lunch)
+        find . -name "*.mk" -exec sed -i '/vendor\/omni/d' {} +
+        find . -name "*.mk" -exec sed -i '/vendor\/twrp/d' {} +
 
     - name: Building OrangeFox
       run: |
