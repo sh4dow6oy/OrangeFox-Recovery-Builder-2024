@@ -36,80 +36,23 @@ jobs:
         sudo bash setup/android_build_env.sh
         sed -i 's/cd -/cd .. /g' setup/install_android_sdk.sh
         sudo bash setup/install_android_sdk.sh
-
     - name: Sync OrangeFox Sources
       run: |
         git clone https://gitlab.com/OrangeFox/sync.git
         cd sync
         ./orangefox_sync.sh --branch ${{ github.event.inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-
     - name: Clone Device Tree
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
         git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
-
-Iată scriptul YAML complet și final. Am adăugat suportul pentru Partiții Dinamice (Logical), EROFS, EXT4 și am corectat structura pentru ca OrangeFox să "vadă" corect /system, /vendor și restul, chiar dacă sunt în interiorul super-partiției.
-
-Script YAML Final pentru OrangeFox r5q (Binary 9 + Dynamic Partitions)
-YAML
-name: OrangeFox r5q - Final Fix (Dynamic & EROFS)
-on:
-  workflow_dispatch:
-    inputs:
-      MANIFEST_BRANCH:
-        description: 'OrangeFox Manifest Branch'
-        default: '12.1'
-      DEVICE_TREE:
-        description: 'Custom Device Tree'
-        default: 'https://github.com/sh4dow6oy/android_device_samsung_r5q'
-      DEVICE_TREE_BRANCH:
-        description: 'Custom Device Tree Branch'
-        default: 'android-9.0'
-      DEVICE_PATH:
-        description: 'Device Path'
-        default: 'device/samsung/r5q'
-
-jobs:
-  build:
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: write
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
-    - name: Cleanup Workspace
-      uses: rokibhasansagar/slimhub_actions@main
-
-    - name: Prepare Environment
-      run: |
-        sudo apt update
-        sudo apt install -y git python3 tar aria2 bc build-essential zip curl libssl-dev
-        git clone https://gitlab.com/OrangeFox/misc/scripts
-        cd scripts
-        sudo bash setup/android_build_env.sh
-        sed -i 's/cd -/cd .. /g' setup/install_android_sdk.sh
-        sudo bash setup/install_android_sdk.sh
-
-    - name: Sync OrangeFox Sources
-      run: |
-        git clone https://gitlab.com/OrangeFox/sync.git
-        cd sync
-        ./orangefox_sync.sh --branch ${{ github.event.inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-
-    - name: Clone Device Tree
-      run: |
-        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
-        git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
-
-    - name: Patch & Fix Device Tree
+    - name: Patch & Fix Device Tree (Fastbootd + Logical)
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
         
-        # 1. Ștergem configurația veche pentru a evita conflictele
+        # 1. Ștergem configurația veche
         rm -f BoardConfig.mk recovery.fstab
         
-        # 2. Creăm un BoardConfig.mk nou-nouț cu suport pentru LOGICAL partitions
+        # 2. Creăm BoardConfig.mk cu suport FASTBOOTD
         cat <<EOF > BoardConfig.mk
         # --- OrangeFox Theme & Display ---
         DEVICE_SCREEN_WIDTH := 1080
@@ -130,19 +73,19 @@ jobs:
         BOARD_MKBOOTIMG_ARGS := --header_version 2 --dtb device/samsung/r5q/prebuilt/dtb.img
         BOARD_RAMDISK_USE_LZ4 := true
         
-        # --- Suport Partiții Dinamice (OBLIGATORIU pentru Lineage/GSI) ---
+        # --- Suport Partiții Dinamice & FASTBOOTD ---
         BOARD_USES_DYNAMIC_PARTITIONS := true
         BOARD_BUILD_SYSTEM_ROOT_IMAGE := true
         BOARD_SUPPORTS_RECOVERY_RESIZE := true
         BOARD_HAS_EROFS := true
         TARGET_RECOVERY_FSTYPE_MOUNT_OPTIONS := erofs=ro
-        
-        # Fix-uri OrangeFox
-        ALLOW_MISSING_DEPENDENCIES := true
-        BUILD_BROKEN_DUP_RULES := true
+
+        # ACTIVARE FASTBOOTD
+        ENABLE_VIRTUAL_AB := true
+        BOARD_RECOVERY_BINARIES += fastbootd
         EOF
 
-        # 3. Creăm un recovery.fstab care mapează partițiile Logice
+        # 3. Actualizăm fstab cu flag-ul LOGICAL (Esențial pentru a "vedea" System la instalare)
         cat <<EOF > recovery.fstab
         /system       erofs   system      display="System";logical;first_stage_mount
         /vendor       ext4    vendor      display="Vendor";logical;first_stage_mount
@@ -172,7 +115,6 @@ jobs:
         export ALLOW_MISSING_DEPENDENCIES=true
         lunch omni_r5q-eng
         mka recoveryimage -j$(nproc)
-
     - name: Upload Recovery
       uses: softprops/action-gh-release@v2
       if: success()
