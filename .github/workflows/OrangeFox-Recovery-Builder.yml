@@ -1,4 +1,4 @@
-name: OrangeFox r5q - Manifest Auth Fix
+name: OrangeFox r5q - GitHub Mirror Sync
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cleanup Workspace
+      - name: Cleanup Workspace (More Space)
         uses: rokibhasansagar/slimhub_actions@main
 
       - name: Install Dependencies
@@ -35,22 +35,19 @@ jobs:
           tar -I zstd -xf neutron-clang-10032024.tar.zst -C ${GITHUB_WORKSPACE}/clang
           echo "${GITHUB_WORKSPACE}/clang/bin" >> $GITHUB_PATH
 
-      - name: Sync OrangeFox (Fix Auth)
+      - name: Sync OrangeFox (Using GitHub Mirror)
         run: |
           mkdir -p ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
           cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
           
-          # Configurăm Git global pentru a evita erorile de autentificare
-          git config --global user.email "orangefox@build.bot"
-          git config --global user.name "OrangeFox Build Bot"
-          git config --global color.ui false
+          git config --global user.email "gh-actions@build.bot"
+          git config --global user.name "GitHub Actions"
           
-          # FIX: Forțăm repo să folosească Python3 și ignorăm prompt-urile interactive
-          export REPO_PYTHON_VERSION=3
-          repo init -u https://gitlab.com/OrangeFox/manifest.git -b 12.1 --depth=1 --quiet
+          # FOLOSIM MIRROR-UL DE GITHUB PENTRU A EVITA EROAREA DE AUTENTIFICARE GITLAB
+          repo init -u https://github.com/OrangeFox/manifest.git -b 12.1 --depth=1
           
-          # Sync cu retry în caz de eșec rețea
-          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags || repo sync -c -j$(nproc --all) --force-sync
+          # Sync optimizat pentru viteză și stabilitate
+          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 
       - name: Clone Device Tree & Roynas Kernel
         run: |
@@ -58,12 +55,12 @@ jobs:
           git clone https://github.com/sh4dow6oy/android_device_samsung_r5q -b android-9.0 ./device/samsung/r5q
           git clone https://github.com/sh4dow6oy/samsung_kernel_r5q -b master ./kernel/samsung/sm8150
 
-      - name: Patch & Clean Tree
+      - name: Patch & Clean Tree (Omni Fix)
         run: |
-          # 1. FIX: Ștergem dependențele Omni inexistente (Rezultatul erorii tale anterioare)
+          # 1. FIX: Eliminăm referințele la vendor/omni din toate fișierele .mk
           cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
-          find . -name "*.mk" -exec sed -i '/vendor\/omni/d' {} +
-          find . -name "*.mk" -exec sed -i '/vendor\/twrp/d' {} +
+          grep -rli "vendor/omni" . | xargs -i@ sed -i '/vendor\/omni/d' @
+          grep -rli "vendor/twrp" . | xargs -i@ sed -i '/vendor\/twrp/d' @
           
           # 2. Kernel Fixes (Roynas Specs)
           cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/kernel/samsung/sm8150
@@ -72,12 +69,10 @@ jobs:
           [ -f arch/arm64/kernel/vdso/Makefile ] && sed -i 's/-static//g' arch/arm64/kernel/vdso/Makefile
           sed -i 's/ifneq ($(wildcard $(srctree)\/scripts\/gcc-wrapper.py),)/ifeq (0,1)/g' Makefile
 
-          # 3. BoardConfig Fixes
+          # 3. Injectăm configurația finală în BoardConfig.mk
           cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
           sed -i 's/TARGET_FORCE_PREBUILT_KERNEL := .*/TARGET_FORCE_PREBUILT_KERNEL := false/g' BoardConfig.mk
-          
           cat <<EOF >> BoardConfig.mk
-          # --- Build Parameters ---
           TARGET_KERNEL_SOURCE := kernel/samsung/sm8150
           TARGET_KERNEL_CONFIG := r5q_defconfig
           BOARD_KERNEL_IMAGE_NAME := Image.gz-dtb
@@ -92,14 +87,12 @@ jobs:
       - name: Build OrangeFox
         run: |
           cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
-          # Variabilele Neutron
+          export ALLOW_MISSING_DEPENDENCIES=true
           export PATH="${GITHUB_WORKSPACE}/clang/bin:$PATH"
           export CC=clang
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-gnu-
-          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-          export ALLOW_MISSING_DEPENDENCIES=true
-          export LC_ALL=C
+          export KCFLAGS="-fcommon -Wno-error -Wno-unknown-warning-option"
           
           source build/envsetup.sh
           lunch omni_r5q-eng
