@@ -45,18 +45,18 @@ jobs:
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
         git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
-    - name: Patch & Fix Device Tree (Fastbootd + Logical)
+    - name: Patch & Fix Device Tree (Theme + Fastbootd Fix)
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
         
-        # 1. Ștergem configurația veche
+        # 1. Curățăm tot pentru un start curat
         rm -f BoardConfig.mk recovery.fstab
-        
-        # 2. Creăm BoardConfig.mk cu suport FASTBOOTD
+
+        # 2. Reconstruim BoardConfig.mk cu variabilele CORECTE de temă
         cat <<EOF > BoardConfig.mk
-        # --- OrangeFox Theme & Display ---
-        DEVICE_SCREEN_WIDTH := 1080
-        DEVICE_SCREEN_HEIGHT := 2400
+        # --- OrangeFox Theme (Nume variabile corecte) ---
+        TARGET_SCREEN_WIDTH := 1080
+        TARGET_SCREEN_HEIGHT := 2400
         TW_THEME := portrait_hdpi
         TW_MAX_BRIGHTNESS := 255
         TW_DEFAULT_BRIGHTNESS := 150
@@ -79,13 +79,14 @@ jobs:
         BOARD_SUPPORTS_RECOVERY_RESIZE := true
         BOARD_HAS_EROFS := true
         TARGET_RECOVERY_FSTYPE_MOUNT_OPTIONS := erofs=ro
-
-        # ACTIVARE FASTBOOTD
-        ENABLE_VIRTUAL_AB := true
         BOARD_RECOVERY_BINARIES += fastbootd
+
+        # Fix-uri Build
+        ALLOW_MISSING_DEPENDENCIES := true
+        BUILD_BROKEN_DUP_RULES := true
         EOF
 
-        # 3. Actualizăm fstab cu flag-ul LOGICAL (Esențial pentru a "vedea" System la instalare)
+        # 3. Recreăm recovery.fstab (Logical mapping)
         cat <<EOF > recovery.fstab
         /system       erofs   system      display="System";logical;first_stage_mount
         /vendor       ext4    vendor      display="Vendor";logical;first_stage_mount
