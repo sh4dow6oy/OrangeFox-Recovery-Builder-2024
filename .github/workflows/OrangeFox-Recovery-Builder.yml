@@ -49,8 +49,12 @@ jobs:
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
         
-        # 1. Curățăm tot pentru un start curat
-        rm -f BoardConfig.mk recovery.fstab
+        # 1. Curățăm orice setare anterioară de display sau boot
+        sed -i '/TW_THEME/d' BoardConfig.mk
+        sed -i '/DEVICE_SCREEN/d' BoardConfig.mk
+        sed -i '/TARGET_SCREEN/d' BoardConfig.mk
+        sed -i '/BOARD_BOOT_HEADER_VERSION/d' BoardConfig.mk
+        sed -i '/BOARD_MKBOOTIMG_ARGS/d' BoardConfig.mk
 
         # 2. Reconstruim BoardConfig.mk cu variabilele CORECTE de temă
         cat <<EOF > BoardConfig.mk
