@@ -1,11 +1,7 @@
-name: OrangeFox r5q - Full Fix (Kernel + Brightness + Fstab)
-
+name: OrangeFox r5q - Binary 9 Fix
 on:
   workflow_dispatch:
     inputs:
-      DEVICE_NAME:
-        description: 'DEVICE_NAME'
-        default: 'r5q'
       MANIFEST_BRANCH:
         description: 'OrangeFox Manifest Branch'
         default: '12.1'
@@ -18,9 +14,6 @@ on:
       DEVICE_PATH:
         description: 'Device Path'
         default: 'device/samsung/r5q'
-      BUILD_TARGET:
-        description: 'Build Target'
-        default: 'recovery'
 
 jobs:
   build:
@@ -43,34 +36,37 @@ jobs:
         sudo bash setup/android_build_env.sh
         sed -i 's/cd -/cd .. /g' setup/install_android_sdk.sh
         sudo bash setup/install_android_sdk.sh
+
     - name: Sync OrangeFox Sources
       run: |
         git clone https://gitlab.com/OrangeFox/sync.git
         cd sync
         ./orangefox_sync.sh --branch ${{ github.event.inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+
     - name: Clone Device Tree
       run: |
-        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
         git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
+
     - name: Patch & Fix Device Tree
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
         
-        # 1. Curățăm setările vechi (Important!)
+        # 1. Curățăm setările vechi
         sed -i '/TW_MAX_BRIGHTNESS/d' BoardConfig.mk
         sed -i '/TW_DEFAULT_BRIGHTNESS/d' BoardConfig.mk
         sed -i '/TW_BRIGHTNESS_PATH/d' BoardConfig.mk
         sed -i '/BOARD_BOOT_HEADER_VERSION/d' BoardConfig.mk
         sed -i '/BOARD_MKBOOTIMG_ARGS/d' BoardConfig.mk
+        sed -i '/BOARD_PREBUILT_DTBIMAGE/d' BoardConfig.mk
+        sed -i '/BOARD_INCLUDE_DTB/d' BoardConfig.mk
 
-        # 2. Adăugăm TOATE setările obligatorii pentru OrangeFox și Binary 9
+        # 2. Adăugăm setările pentru Binary 9 și OrangeFox
         cat <<EOF >> BoardConfig.mk
-        # --- OrangeFox Display Fixes ---
         TW_MAX_BRIGHTNESS := 255
         TW_DEFAULT_BRIGHTNESS := 150
         TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
-
-        # --- Binary 9 / Android 13 Boot Fixes ---
+        
         BOARD_BOOT_HEADER_VERSION := 2
         BOARD_INCLUDE_DTB := true
         BOARD_PREBUILT_DTBIMAGE := device/samsung/r5q/prebuilt/dtb.img
@@ -79,23 +75,34 @@ jobs:
         TARGET_FORCE_PREBUILT_KERNEL := true
         BOARD_MKBOOTIMG_ARGS := --header_version 2 --dtb device/samsung/r5q/prebuilt/dtb.img
         BOARD_RAMDISK_USE_LZ4 := true
-
-        # --- System Fixes ---
+        
         BOARD_HAS_EROFS := true
         BOARD_USES_DYNAMIC_PARTITIONS := true
         ALLOW_MISSING_DEPENDENCIES := true
+        BUILD_BROKEN_DUP_RULES := true
         EOF
 
-        # 3. Curățăm referințele de vendor (pentru succesul 'lunch')
+        # 3. Curățenie Vendor
         find . -name "*.mk" -exec sed -i '/vendor\/omni/d' {} +
         find . -name "*.mk" -exec sed -i '/vendor\/twrp/d' {} +
+
+    - name: Build OrangeFox
+      run: |
+        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
+        set +e
+        source build/envsetup.sh
+        export ALLOW_MISSING_DEPENDENCIES=true
+        lunch omni_r5q-eng
+        mka recoveryimage -j$(nproc)
+
     - name: Upload Recovery
       uses: softprops/action-gh-release@v2
+      if: success()
       with:
         files: |
-          OrangeFox/fox_12.1/out/target/product/r5q/*.img
-          OrangeFox/fox_12.1/out/target/product/r5q/*.zip
-        name: OrangeFox-r5q-S10Lite-Build-${{ github.run_id }}
+          OrangeFox/fox_12.1/out/target/product/r5q/OrangeFox*.zip
+          OrangeFox/fox_12.1/out/target/product/r5q/recovery.img
+        name: OrangeFox-r5q-Binary9-${{ github.run_id }}
         tag_name: ${{ github.run_id }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
