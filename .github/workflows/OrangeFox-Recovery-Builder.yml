@@ -35,25 +35,17 @@ jobs:
           tar -I zstd -xf neutron-clang-10032024.tar.zst -C ${GITHUB_WORKSPACE}/clang
           echo "${GITHUB_WORKSPACE}/clang/bin" >> $GITHUB_PATH
 
-      - name: Sync OrangeFox (Using GitHub Mirror)
+      - name: Sync OrangeFox Sources
         run: |
-          mkdir -p ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
-          cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
-          
-          git config --global user.email "gh-actions@build.bot"
-          git config --global user.name "GitHub Actions"
-          
-          # FOLOSIM MIRROR-UL DE GITHUB PENTRU A EVITA EROAREA DE AUTENTIFICARE GITLAB
-          repo init -u https://github.com/OrangeFox/manifest.git -b 12.1 --depth=1
-          
-          # Sync optimizat pentru viteză și stabilitate
-          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+          git clone https://gitlab.com/OrangeFox/sync.git
+          cd sync
+          ./orangefox_sync.sh --branch ${{ github.event.inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
 
       - name: Clone Device Tree & Roynas Kernel
         run: |
           cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
           git clone https://github.com/sh4dow6oy/android_device_samsung_r5q -b android-9.0 ./device/samsung/r5q
-          git clone https://github.com/sh4dow6oy/samsung_kernel_r5q -b master ./kernel/samsung/sm8150
+          git clone https://github.com/Roynas-Android-Playground/kernel_samsung_r3q -b master ./kernel/samsung/sm8150
 
       - name: Patch & Clean Tree (Omni Fix)
         run: |
