@@ -45,19 +45,21 @@ jobs:
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
         git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
-    - name: Patch & Fix Device Tree (Fastboot + System Fix)
+    - name: Patch & Fix Device Tree (Absolute Theme Fix)
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
         
-        # 1. Curățăm setările vechi (folosim rm ca să fim siguri că nu rămân dubluri)
+        # 1. Resetăm fișierele pentru a fi siguri
         rm -f BoardConfig.mk recovery.fstab
 
-        # 2. Reconstruim BoardConfig.mk (exact ca cel care s-a compilat + Fastboot)
+        # 2. Reconstruim BoardConfig.mk (fără dubluri)
         cat <<EOF > BoardConfig.mk
-        # --- Display Settings ---
+        # --- Display & Theme ---
+        TW_THEME := portrait_hdpi
+        DEVICE_SCREEN_WIDTH := 1080
+        DEVICE_SCREEN_HEIGHT := 2400
         TARGET_SCREEN_WIDTH := 1080
         TARGET_SCREEN_HEIGHT := 2400
-        TW_THEME := portrait_hdpi
         TW_MAX_BRIGHTNESS := 255
         TW_DEFAULT_BRIGHTNESS := 150
         TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
@@ -73,13 +75,11 @@ jobs:
         BOARD_MKBOOTIMG_ARGS := --header_version 2 --dtb device/samsung/r5q/prebuilt/dtb.img
         BOARD_RAMDISK_USE_LZ4 := true
         
-        # --- Suport Partiții Dinamice (Ca să apară SYSTEM) ---
+        # --- Suport Partiții Dinamice & Fastbootd ---
         BOARD_USES_DYNAMIC_PARTITIONS := true
         BOARD_BUILD_SYSTEM_ROOT_IMAGE := true
         BOARD_HAS_EROFS := true
         TARGET_RECOVERY_FSTYPE_MOUNT_OPTIONS := erofs=ro
-
-        # --- ACTIVARE FASTBOOTD ---
         BOARD_RECOVERY_BINARIES += fastbootd
 
         # Fix-uri Build
@@ -87,13 +87,18 @@ jobs:
         BUILD_BROKEN_DUP_RULES := true
         EOF
 
-        # 3. Creăm recovery.fstab NOU (cu flag-ul logical ca să vadă System)
+        # 3. !!! TRUCUL MAGIC: Injectăm tema în fișierul de produs !!!
+        # Asta forțează Soong să vadă tema înainte de orice eroare
+        sed -i '1i TW_THEME := portrait_hdpi' omni_r5q.mk
+        sed -i '2i TARGET_SCREEN_WIDTH := 1080' omni_r5q.mk
+        sed -i '3i TARGET_SCREEN_HEIGHT := 2400' omni_r5q.mk
+
+        # 4. recovery.fstab cu suport LOGICAL (ca să vezi System)
         cat <<EOF > recovery.fstab
         /system       erofs   system      display="System";logical;first_stage_mount
         /vendor       ext4    vendor      display="Vendor";logical;first_stage_mount
         /product      ext4    product     display="Product";logical;first_stage_mount
         /odm          ext4    odm         display="Odm";logical;first_stage_mount
-
         /boot         emmc    /dev/block/bootdevice/by-name/boot        flags=backup=1;flashimg=1
         /recovery     emmc    /dev/block/bootdevice/by-name/recovery    flags=backup=1;flashimg=1
         /metadata     ext4    /dev/block/bootdevice/by-name/metadata    display="Metadata"
@@ -101,12 +106,11 @@ jobs:
         /cache        ext4    /dev/block/bootdevice/by-name/cache
         /efs          ext4    /dev/block/bootdevice/by-name/efs          display="EFS";backup=1
         /dtbo         emmc    /dev/block/bootdevice/by-name/dtbo         display="DTBO";backup=1;flashimg=1
-
         /external_sd  vfat    /dev/block/mmcblk0p1 /dev/block/mmcblk0    flags=display="MicroSD";storage;wipeui;removable
         /usb-otg      vfat    /dev/block/sdg1      /dev/block/sdg        flags=display="USB-OTG";storage;wipeui;removable
         EOF
 
-        # 4. Curățenie Vendor (obligatoriu pentru succes)
+        # 5. Curățenie Vendor
         find . -name "*.mk" -exec sed -i '/vendor\/omni/d' {} +
         find . -name "*.mk" -exec sed -i '/vendor\/twrp/d' {} +
     - name: Build OrangeFox
