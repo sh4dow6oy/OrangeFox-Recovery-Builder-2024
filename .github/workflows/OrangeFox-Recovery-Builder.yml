@@ -56,52 +56,39 @@ jobs:
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1/device/samsung/r5q
         
-        # 1. Ștergem setările vechi ca să nu se bată cap în cap
+        # 1. Curățăm setările vechi (Important!)
+        sed -i '/TW_MAX_BRIGHTNESS/d' BoardConfig.mk
+        sed -i '/TW_DEFAULT_BRIGHTNESS/d' BoardConfig.mk
+        sed -i '/TW_BRIGHTNESS_PATH/d' BoardConfig.mk
         sed -i '/BOARD_BOOT_HEADER_VERSION/d' BoardConfig.mk
         sed -i '/BOARD_MKBOOTIMG_ARGS/d' BoardConfig.mk
-        sed -i '/BOARD_PREBUILT_DTBIMAGE/d' BoardConfig.mk
-        sed -i '/BOARD_INCLUDE_DTB/d' BoardConfig.mk
-        sed -i '/TARGET_PREBUILT_KERNEL/d' BoardConfig.mk
-        sed -i '/BOARD_PREBUILT_DTBOIMAGE/d' BoardConfig.mk
 
-        # 2. Adăugăm configurația pentru Binary 9 și DTB-ul de 974KB
+        # 2. Adăugăm TOATE setările obligatorii pentru OrangeFox și Binary 9
         cat <<EOF >> BoardConfig.mk
-        # --- Configurație Finală Binary 9 ---
+        # --- OrangeFox Display Fixes ---
+        TW_MAX_BRIGHTNESS := 255
+        TW_DEFAULT_BRIGHTNESS := 150
+        TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
+
+        # --- Binary 9 / Android 13 Boot Fixes ---
         BOARD_BOOT_HEADER_VERSION := 2
         BOARD_INCLUDE_DTB := true
-        
-        # Fișierele tale din folderul 'prebuilt'
         BOARD_PREBUILT_DTBIMAGE := device/samsung/r5q/prebuilt/dtb.img
         BOARD_PREBUILT_DTBOIMAGE := device/samsung/r5q/prebuilt/dtbo.img
         TARGET_PREBUILT_KERNEL := device/samsung/r5q/prebuilt/kernel
         TARGET_FORCE_PREBUILT_KERNEL := true
-        
-        # Instrucțiuni pentru mkbootimg
         BOARD_MKBOOTIMG_ARGS := --header_version 2 --dtb device/samsung/r5q/prebuilt/dtb.img
-        
-        # Compresie necesară pentru Samsung A13
         BOARD_RAMDISK_USE_LZ4 := true
-        
-        # Fix-uri de sistem
+
+        # --- System Fixes ---
         BOARD_HAS_EROFS := true
         BOARD_USES_DYNAMIC_PARTITIONS := true
         ALLOW_MISSING_DEPENDENCIES := true
         EOF
 
-        # 3. Curățenie obligatorie vendor
+        # 3. Curățăm referințele de vendor (pentru succesul 'lunch')
         find . -name "*.mk" -exec sed -i '/vendor\/omni/d' {} +
         find . -name "*.mk" -exec sed -i '/vendor\/twrp/d' {} +
-
-    - name: Building OrangeFox
-      run: |
-        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-        set +e
-        source build/envsetup.sh
-        set -e
-        export ALLOW_MISSING_DEPENDENCIES=true
-        export LC_ALL=C
-        lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng
-        mka ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
     - name: Upload Recovery
       uses: softprops/action-gh-release@v2
       with:
