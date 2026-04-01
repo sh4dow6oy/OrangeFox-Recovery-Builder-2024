@@ -226,16 +226,7 @@ jobs:
         cd ${{ env.FILE_PATH }}/recovery/root/
         python3 ldcheck -p system/lib64:vendor/lib64:system/lib:vendor/lib -d ${{ github.event.inputs.LDCHECK }}
         echo "Done checking missing dependencies. Review, and reconfigure your tree."
-      continue-on-error: true        
-        BOARD_RAMDISK_USE_LZ4 := true
-        BOARD_HAS_EROFS := true
-        BOARD_USES_DYNAMIC_PARTITIONS := true
-        ALLOW_MISSING_DEPENDENCIES := true
-        BOARD_RECOVERY_BINARIES += fastbootd
-        BUILD_BROKEN_DUP_RULES := true
-        EOF
-        # 3. Curățenie Vendor obligatorie
-        find . -name "*.mk" -exec sed -i '/vendor\/omni/d' {} +
+        continue-on-error: true     find . -name "*.mk" -exec sed -i '/vendor\/omni/d' {} +
         find . -name "*.mk" -exec sed -i '/vendor\/twrp/d' {} +
     - name: Build OrangeFox
       run: |
@@ -243,7 +234,7 @@ jobs:
         set +e
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        lunch omni_r5q-eng
+        lunch twrp_r5q
         mka recoveryimage -j$(nproc)
     - name: Upload Recovery
       uses: softprops/action-gh-release@v2
