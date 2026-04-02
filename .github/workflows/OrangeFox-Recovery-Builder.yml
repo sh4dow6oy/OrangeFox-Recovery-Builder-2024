@@ -72,7 +72,6 @@ jobs:
         echo "Include Recovery Installer: ${{ github.event.inputs.RECOVERY_INSTALLER }}"
         echo "Release recovery.tar For Samsung devices: ${{ github.event.inputs.RECOVERY_TAR }}"
         echo "::endgroup::"
-
     - name: Clean-up
       uses: rokibhasansagar/slimhub_actions@main
 
@@ -99,14 +98,12 @@ jobs:
         git clone https://gitlab.com/OrangeFox/sync.git
         cd sync
         ./orangefox_sync.sh --branch ${{ github.event.inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-
     - name: Clone Device Tree
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
         git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
         cd ${{ github.event.inputs.DEVICE_PATH }}
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
-
     - name: Check Manifest Branch
       uses: haya14busa/action-cond@v1
       id: fox_branch
@@ -117,22 +114,12 @@ jobs:
       
     - name: Building OrangeFox
       run: |
-        # 1. Check if the directory actually exists
-        if [ ! -d "${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}" ]; then
-          echo "ERROR: Target directory not found. Sync likely failed or ran out of disk space."
-          ls -R ${GITHUB_WORKSPACE}/OrangeFox  # Debug: show what WAS created
-          exit 1
-        fi
-
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-        
-        # 2. Set up the build environment
+        set +e
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        
-        # 3. Execute the command string correctly using bash -c
-        bash -c "${{ steps.fox_branch.outputs.value }}"
-
+        set -e
+        ${{ steps.fox_branch.outputs.value }}
     - name: Set Build Date # Output will be use in Release
       run: |
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
@@ -141,7 +128,6 @@ jobs:
           DEVICE_TREE_URL="${DEVICE_TREE_URL%.git}"
         fi
         echo "DEVICE_TREE_URL=${DEVICE_TREE_URL}" >> $GITHUB_ENV
-
     - name: Check if Recovery Exist
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
@@ -157,7 +143,6 @@ jobs:
             echo "Recovery out directory is empty."
             cd Exit
         fi
-
     - name: Rename the Recovery
       run: |
         cd ${{ env.FILE_PATH }}/
@@ -230,13 +215,12 @@ jobs:
     - name: Run LDCheck
       run: |
         cd tools
-        mv -n libneeds ${{ env.FILE_PATH }}/recovery/root/
-        mv -n ldcheck ${{ env.FILE_PATH }}/recovery/root/
-        cd ${{ env.FILE_PATH }}/recovery/root/
+        mv -n libneeds ${GITHUB_WORKSPACE}/workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery/root/
+        mv -n ldcheck ${GITHUB_WORKSPACE}/workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery/root/
+        cd ../workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery/root
         python3 ldcheck -p system/lib64:vendor/lib64:system/lib:vendor/lib -d ${{ github.event.inputs.LDCHECK }}
         echo "Done checking missing dependencies. Review, and reconfigure your tree."
-        continue-on-error: true     find . -name "*.mk" -exec sed -i '/vendor\/omni/d' {} +
-        find . -name "*.mk" -exec sed -i '/vendor\/twrp/d' {} +
+      continue-on-error: true
     - name: Build OrangeFox
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_12.1
