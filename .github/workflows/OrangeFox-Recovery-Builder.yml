@@ -117,10 +117,20 @@ jobs:
       
     - name: Building OrangeFox
       run: |
+        # 1. Check if the directory actually exists
+        if [ ! -d "${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}" ]; then
+          echo "ERROR: Target directory not found. Sync likely failed or ran out of disk space."
+          ls -R ${GITHUB_WORKSPACE}/OrangeFox  # Debug: show what WAS created
+          exit 1
+        fi
+
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        
+        # 2. Set up the build environment
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        # Use bash -c to execute the string as a command line
+        
+        # 3. Execute the command string correctly using bash -c
         bash -c "${{ steps.fox_branch.outputs.value }}"
 
     - name: Set Build Date # Output will be use in Release
